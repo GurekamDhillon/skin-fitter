@@ -459,6 +459,121 @@ def detect(src, hint=""):
     return sorted(best, reverse=True)
 
 
+# ---------------------------------------------------------------- layered materials (eyes) ------------------------------
+def _coord(ref):
+    m = re.match(r"TexCoord(\d)", str(ref.get("coord", "TexCoord0")))
+    return int(m.group(1)) if m else 0
+
+
+def layered_objects(src):
+    """Objects whose material samples a UV set beyond the first two (Brawl eyes: white, iris and lids on sets 0-3).
+    Melee costumes carry one UV set per textured slot, so these are baked to one image."""
+    mats = {m["name"]: m for m in src.get("materials", [])}; out = []
+    for o in src.get("objects", []):
+        refs = [r for r in mats.get(o.get("material"), {}).get("refs", []) if r.get("map", "TexCoord") == "TexCoord" and r.get("texture")]
+        if len(refs) > 1 and any(_coord(r) >= 2 for r in refs): out.append((o, refs))
+    return out
+
+
+def bake_layers(src, log, size=None):
+    """Bake each layered object's textures into one static RGBA8 image in UV-set-0 space: every texel covered by a
+    triangle's UV0 footprint samples each layer through that layer's own UV set and composites them bottom-up
+    (Brawl lists the top layer first: lids, iris, white). The object then uses a single texture on UV0. Eyes become static (no blink).
+    Returns the number of objects baked. Requires model_export's per-vertex "uvx" (UV sets 2..7)."""
+    import gxdecode
+    T = {t["name"]: t for t in src.get("textures", [])}; n = 0
+    for o, refs in layered_objects(src):
+        if "uvx" not in o:
+            log.append("layered material %s: the source has no extra UV sets (re-export with this version's model_export); not baked" % o.get("material")); continue
+        try:
+            L = [(gxdecode.decode(T[r["texture"]]).astype(float) / 255, _coord(r), r) for r in refs]
+        except (KeyError, ValueError) as e:
+            log.append("layered material %s: %s; not baked" % (o.get("material"), e)); continue
+        W = H = 0                                  # the baked image lives in UV0 space: use the UV0 layer's size
+        for img, s, _ in L:
+            if s == 0: H, W = img.shape[:2]; break
+        else:
+            for img, _, _ in L: H, W = max(H, img.shape[0]), max(W, img.shape[1])
+        W, H = min(int(size or W), 256), min(int(size or H), 256)
+        W, H = max(4, W - W % 4), max(4, H - H % 4)
+        fps, uvx = o["tris"], o["uvx"]
+        def uv(i, s):                              # UV set s of facepoint i
+            return fps[i][6 + 2 * s:8 + 2 * s] if s < 2 else uvx[i][2 * (s - 2):2 * (s - 2) + 2]
+        out = np.zeros((H, W, 4)); cov = np.zeros((H, W), bool)
+        def samp(img, u, v, r):
+            h, w = img.shape[:2]
+            def wrap(x, mode):
+                return np.clip(x, 0, 0.9999) if mode == "Clamp" else x - np.floor(x)
+            x = (wrap(u, r.get("u")) * w).astype(int); y = (wrap(v, r.get("v")) * h).astype(int)
+            return img[np.clip(y, 0, h - 1), np.clip(x, 0, w - 1)]
+        for t in range(0, len(fps) - 2, 3):
+            base = np.array([uv(t + k, 0) for k in range(3)], float)
+            p = base * [W, H]                      # UV0 texels outside 0..1 are not baked
+            x0, y0 = np.floor(p.min(0)).astype(int); x1, y1 = np.ceil(p.max(0)).astype(int)
+            xs, ys = np.meshgrid(np.arange(max(x0, 0), min(x1 + 1, W)), np.arange(max(y0, 0), min(y1 + 1, H)))
+            P = np.stack([xs.ravel() + .5, ys.ravel() + .5], 1)
+            M = np.array([p[1] - p[0], p[2] - p[0]]).T
+            if P.size == 0 or abs(np.linalg.det(M)) < 1e-9: continue
+            l = np.linalg.solve(M, (P - p[0]).T).T; l0 = 1 - l.sum(1); ok = (l >= -0.02).all(1) & (l0 >= -0.02)
+            if not ok.any(): continue
+            bw = np.stack([l0, l[:, 0], l[:, 1]], 1)[ok]; px = P[ok].astype(int)
+            col = np.zeros((len(px), 4))
+            for img, s, r in reversed(L):           # Brawl lists the top layer first (lids, iris, white)
+                uvs = bw @ np.array([uv(t + k, s) for k in range(3)], float)
+                c = samp(img, uvs[:, 0], uvs[:, 1], r); a = c[:, 3:4]
+                col[:, :3] = col[:, :3] * (1 - a) + c[:, :3] * a; col[:, 3:4] = col[:, 3:4] + a * (1 - col[:, 3:4])
+            out[px[:, 1], px[:, 0]] = col; cov[px[:, 1], px[:, 0]] = True
+        for _ in range(4):                         # dilate so filtering at the edges does not pull in black
+            nb = np.zeros_like(out); cnt = np.zeros((H, W))
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                sc = np.roll(np.roll(cov, dy, 0), dx, 1); nb[sc] += np.roll(np.roll(out, dy, 0), dx, 1)[sc]; cnt[sc] += 1
+            add = (~cov) & (cnt > 0); out[add] = nb[add] / cnt[add][:, None]; cov |= add
+        img = (np.clip(out, 0, 1) * 255).astype(np.uint8)
+        name = "Baked_%s" % o["name"]
+        src["textures"].append({"name": name, "fmt": "RGBA8", "w": W, "h": H, "lod": 1, "hs": 64,
+                                "data": base64.b64encode(gxdecode.encode_rgba8(img)).decode()})
+        mat = dict(next(m for m in src["materials"] if m["name"] == o["material"]))
+        r0 = next((r for r in refs if _coord(r) == 0), refs[0])
+        mat["name"] = o["material"] + "_baked"; mat["refs"] = [dict(r0, texture=name, palette=None, coord="TexCoord0", u="Clamp", v="Clamp")]
+        mat["alpha_test"] = bool(mat.get("alpha_test"))
+        src["materials"].append(mat); o["material"] = mat["name"]; o["baked_layers"] = len(L)
+        log.append("eyes baked from %d layers (%s); static, no blink" % (len(L), o["name"])); n += 1
+    return n
+
+
+# Brawl fighter (folder / Fit<Name> file name, lower case) -> the Melee fighter that exists in both games.
+BRAWL_TO_MELEE = {"mario": "mario", "luigi": "luigi", "donkey": "dk", "link": "link", "samus": "samus", "yoshi": "yoshi",
+                  "kirby": "kirby", "fox": "fox", "pikachu": "pikachu", "ness": "ness", "captain": "falcon",
+                  "purin": "jigglypuff", "peach": "peach", "koopa": "bowser", "popo": "popo", "nana": "nana",
+                  "zelda": "zelda", "sheik": "sheik", "marth": "marth", "gamewatch": "gameandwatch", "falco": "falco",
+                  "ganon": "ganondorf"}
+DETECT_MARGIN = 0.1
+
+
+def brawl_name(hint, src=None):
+    """The Brawl fighter named by the source itself: Fit<Name>NN.pac/.pcs, a fighter/<name>/ folder, or the model name."""
+    h = (hint or "").replace("\\", "/")
+    m = re.search(r"Fit([A-Za-z]+?)(\d\d)?(?:_[A-Za-z0-9]+)?\.(pac|pcs|json)$", os.path.basename(h), re.I)
+    if m: return m.group(1).lower()
+    m = re.search(r"/fighter/([A-Za-z]+)/", h + "/", re.I)
+    if m: return m.group(1).lower()
+    m = re.match(r"Fit([A-Za-z]+?)(\d\d)?$", str((src or {}).get("model", "")))
+    return m.group(1).lower() if m else None
+
+
+def detect_fighter(src, hint=""):
+    """-> {"fighter", "how", "candidates": [(score, melee fighter)], "needs_review"}. The source's own name decides
+    first (bone names cannot tell clones such as Mario and Luigi apart); bone-name scoring is the fallback, and two
+    candidates within DETECT_MARGIN are both reported with needs_review set."""
+    name = brawl_name(hint, src)
+    if name in BRAWL_TO_MELEE:
+        return {"fighter": BRAWL_TO_MELEE[name], "how": "name %s" % name, "candidates": [(1.0, BRAWL_TO_MELEE[name])], "needs_review": False}
+    det = [(s, k) for s, k, _ in detect(src, "") if s >= 0.5]
+    if not det: return {"fighter": None, "how": "no match", "candidates": [], "needs_review": True}
+    close = [x for x in det if det[0][0] - x[0] <= DETECT_MARGIN]
+    return {"fighter": det[0][1], "how": "bones", "candidates": close if len(close) > 1 else det[:1], "needs_review": len(close) > 1}
+
+
 # ---------------------------------------------------------------- reduction to budget --------------------------------------
 def decimate(tris, budget):
     """Vertex clustering on a growing grid. A cluster key includes the rounded UV and the dominant joint, so texture
@@ -494,13 +609,15 @@ def fit_budget(sk, tgt, budget, log):
     if tot <= budget:
         log.append("triangles %d within budget %d: no reduction" % (tot, budget)); return
     W = [np.array(j["world"]) for j in tgt["joints"]]; I = [np.linalg.inv(w) for w in W]
+    small = sum(len(d["tris"]) for d in sk["dobjs"] if d.get("tris") and len(d["tris"]) <= 4)   # left as they are
+    big = tot - small; budget = max(budget - small, 4)
     def xf(v, M): v["p"] = (M[v["w"][0][0]] @ np.array(list(v["p"]) + [1.0]))[:3].tolist()
     for d in sk["dobjs"]:
-        if not d.get("tris"): continue
+        if not d.get("tris") or len(d["tris"]) <= 4: continue
         for t in d["tris"]:
             for v in t:
                 if len(v["w"]) == 1 and tgt["joints"][v["w"][0][0]]["ibm"]: xf(v, W)
-        share = max(4, int(budget * len(d["tris"]) / tot)); before = len(d["tris"])
+        share = max(4, int(budget * len(d["tris"]) / big)); before = len(d["tris"])
         d["tris"], cell = decimate(d["tris"], share)
         for t in d["tris"]:
             for v in t:
@@ -512,9 +629,12 @@ def fit_budget(sk, tgt, budget, log):
 def build(a):
     """0 ok/installed, 1 internal failure, 2 over the limits (not installed), 3 unreadable source or bad slot config."""
     work = a.work or os.path.splitext(a.out)[0] + "_work"; os.makedirs(work, exist_ok=True)
-    log = []
+    log = []; baked = 0
     try:
         src = export_source(a.source, work, a.source_costume)
+        baked = bake_layers(src, log) if not getattr(a, "no_bake_eyes", False) else 0
+        if getattr(a, "no_bake_eyes", False) and layered_objects(src):
+            log.append("layered materials not baked (--no-bake-eyes): only their first texture is used")
     except SourceError as e:
         print("SOURCE ERROR (%s): %s" % (os.path.basename(a.source), e)); return 3
     try:                                    # first use: generate the disc-derived maps from the user's own files
@@ -523,11 +643,15 @@ def build(a):
     except Exception as e:
         log.append("map generation skipped: %s" % type(e).__name__)
     det = detect(src, os.path.abspath(a.source)); log.append("detected source rig: %s" % (", ".join("%s %.2f" % (k, s) for s, k, _ in det[:3]) or "no template"))
+    who = detect_fighter(src, os.path.abspath(a.source))
+    log.append("source fighter: %s (%s)%s" % (who["fighter"], who["how"], "; candidates %s NEEDS REVIEW" % ", ".join(
+        "%s %.2f" % (k, s) for s, k in who["candidates"]) if who["needs_review"] else ""))
     tgt = read_target(a.retail, a.fighter, a.plco)
     json.dump(tgt, open(os.path.join(work, "target.json"), "w"))
     mapfile = a.map
     if not mapfile:
-        for cand in ([det[0][1]] if det and det[0][0] >= 0.5 else []) + [a.fighter]:
+        named = [who["fighter"]] if who["how"].startswith("name") else []
+        for cand in named + ([det[0][1]] if det and det[0][0] >= 0.5 and not who["needs_review"] else []) + [a.fighter]:
             p = paths.map_file("%s.bones.json" % cand)
             if p: mapfile = p; break
     start = json.load(open(mapfile))["source_to_target"] if mapfile else None
@@ -552,20 +676,27 @@ def build(a):
         print("SLOT CONFIG ERROR: %s is named in the slot config but not in this source" % e); return 3
     run([CB, "inspect", a.retail, os.path.join(work, "inspect_retail.json")])
     ir = json.load(open(os.path.join(work, "inspect_retail.json")))
+    # the triangle limit is on the whole costume (README: at most 1.6x retail); kept retail slots and blanked slots
+    # (one triangle each) count against it, so the replaced meshes get what is left
     budget = a.tri_budget or int(ir["tris"] * LIMITS["tri_growth"])
+    kept = sum(ir["dobjs"][d["dobj"]]["tris"] if d["mode"] == "keep" else 1 for d in sk["dobjs"]
+               if d["mode"] in ("keep", "blank") and d["dobj"] < len(ir["dobjs"]))
     if "_auto" in groups:
         import autogroups; autogroups.post_reduce(sk, groups, tgt, log)
-    fit_budget(sk, tgt, budget, log)
+    fit_budget(sk, tgt, max(budget - kept, 4), log)
     json.dump(sk, open(os.path.join(work, "skin.json"), "w"))
     run([CB, "build", a.retail, os.path.join(work, "skin.json"), a.out, os.path.join(work, "build_report.json")])
     run([CB, "inspect", a.out, os.path.join(work, "inspect_out.json")])
     d = subprocess.run([sys.executable, os.path.join(HERE, "jointdiff.py"), a.retail, a.out], capture_output=True, text=True)
     open(os.path.join(work, "jointdiff.txt"), "w").write(d.stdout + d.stderr)
     br = json.load(open(os.path.join(work, "build_report.json")))
-    ck = checks(br, ir, json.load(open(os.path.join(work, "inspect_out.json"))), d.returncode, sk["stats"], tri_budget=budget + ir["tris"])
+    ck = checks(br, ir, json.load(open(os.path.join(work, "inspect_out.json"))), d.returncode, sk["stats"], tri_budget=budget)
     ck["low_confidence"] = {k: v for k, v in mp["source_to_target"].items() if v["confidence"] < 0.5}
     ck["source"] = {"file": os.path.basename(a.source), "sha256": sha256(a.source) if os.path.isfile(a.source) else None,
                     "detected": [list(x) for x in det[:3]]}
+    if baked:
+        n = max(o.get("baked_layers", 0) for o in src["objects"])
+        ck["checks"].append({"check": "eyes", "pass": True, "detail": "eyes baked from %d layers; static, no blink" % n})
     ck["steps"] = log + ["texture %s: %s %dx%d (%s)" % (t["name"], t["fmt"], t["w"], t["h"], t["note"]) for t in br["textures"]]
     json.dump(ck, open(os.path.join(work, "checks.json"), "w"), indent=1)
     for line in ck["steps"]: print("  " + line)
@@ -575,7 +706,22 @@ def build(a):
         os.replace(a.out, a.out + ".rejected")
         print("STOP: over the limits above; written as %s, not installed" % os.path.basename(a.out + ".rejected")); return 2
     if a.install:
-        install(a.out, a.install, a.fighter, a.name, a.slot, ck["source"])
+        dest = install(a.out, a.install, a.fighter, a.name, a.slot, ck["source"])
+        if a.slot and a.slot != "Nr":
+            # a retagged colour file is compared with that colour's retail file when it is available (same folder as
+            # --retail, Pl<code><slot>.dat): it replaces that file, so its skeleton must match that file's
+            import melee_fighters as B
+            sr = os.path.join(os.path.dirname(os.path.abspath(a.retail)), "Pl%s%s.dat" % (B.FIGHTERS[a.fighter][1], a.slot))
+            if os.path.exists(sr):
+                d2 = subprocess.run([sys.executable, os.path.join(HERE, "jointdiff.py"), sr, dest], capture_output=True, text=True)
+                ok = d2.returncode == 0
+                ck["checks"].append({"check": "skeleton identical to %s retail" % a.slot, "pass": ok, "detail": "jointdiff.py exit %d" % d2.returncode})
+                ck["netplay_safe"] = ck["netplay_safe"] and ok
+                json.dump(ck, open(os.path.join(work, "checks.json"), "w"), indent=1)
+                print("%s  %-34s jointdiff.py exit %d" % ("PASS" if ok else "FAIL", "skeleton identical to %s retail" % a.slot, d2.returncode))
+                if not ok: print("netplay-safe: NO (the %s colour's skeleton differs from the costume this was built on)" % a.slot); return 2
+            else:
+                print("note: Pl<code>%s.dat not next to --retail; jointdiff ran against --retail only" % a.slot)
     return 0
 
 
@@ -648,6 +794,7 @@ def install(dat, mods, fighter, name, slot=None, source=None):
         man["files"] = sorted(set(old) | {fn})
     json.dump(man, open(mp, "w"), indent=1)
     print("installed %s -> %s" % (fn, os.path.join(mods, mid)))
+    return os.path.join(d, fn)
 
 
 def main():
@@ -663,6 +810,7 @@ def main():
     p.add_argument("--plco"); p.add_argument("--map"); p.add_argument("--work"); p.add_argument("--scale", type=float)
     p.add_argument("--repose", default="aim", choices=("aim", "rigid", "none")); p.add_argument("--source-costume", default="00")
     p.add_argument("--install"); p.add_argument("--name"); p.add_argument("--slot"); p.add_argument("--tri-budget", type=int)
+    p.add_argument("--no-bake-eyes", action="store_true", help="do not bake layered (multi-UV-set) eye materials into one image")
     p = sp.add_parser("batch")
     for x in ("--in-dir", "--out-dir", "--fighter", "--retail"): p.add_argument(x, required=True)
     p.add_argument("--groups"); p.add_argument("--fighter-dat")

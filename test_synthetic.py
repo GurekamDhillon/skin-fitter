@@ -101,12 +101,17 @@ def main(work):
     ck = skin.checks(rep, ir, io, 0, sk["stats"])
     for x in ck["checks"]: print("%s %-34s %s" % ("PASS" if x["pass"] else "FAIL", x["check"], x["detail"]))
     assert ck["netplay_safe"]
+    res = {x["check"]: x["pass"] for x in ck["checks"]}
+    # expected: the 2 KB synthetic retail file makes the 1.6x file-size check fail (README "Tests"); triangles pass
+    assert res["file size"] is False and res["triangles"] is True, res
+    lim = [x["detail"] for x in ck["checks"] if x["check"] == "triangles"][0]
+    assert "budget %d" % int(ir["tris"] * skin.LIMITS["tri_growth"]) in lim, lim          # 1.6x retail, whole costume
     print("ALL SYNTHETIC TESTS PASS")
 
 
 def _main():
     w = sys.argv[1] if len(sys.argv) > 1 else os.path.join(tempfile.gettempdir(), "skin_synth")
-    main(w); test_community(w); test_autogroups(w); print('front demo tree:', build_front_demo(w))
+    main(w); test_community(w); test_autogroups(w); test_detect(w); test_eyes(w); print('front demo tree:', build_front_demo(w))
 
 
 def test_community(work):
@@ -157,12 +162,93 @@ def test_community(work):
         ck = json.load(open(os.path.join(outd, "PlLg_heavy_work", "checks.json")))
         assert ck["netplay_safe"] and any("->" in st for st in ck["steps"]), ck["steps"]
         io = json.load(open(os.path.join(outd, "PlLg_heavy_work", "inspect_out.json")))
-        assert io["tris"] <= 260, io["tris"]           # 200 budget (+ the untouched DObjs)
+        assert io["tris"] <= 200, io["tris"]           # the budget covers the whole costume, kept DObjs included
         print("reduction:", [x for x in ck["steps"] if "->" in x])
     finally:
         os.remove(tdir); skin.LIMITS["file_growth"] = 1.6
     print("COMMUNITY-SKIN TESTS PASS")
 
+
+
+def rgba_tex(name, img):
+    import gxdecode
+    return {"name": name, "fmt": "RGBA8", "w": img.shape[1], "h": img.shape[0], "data": base64.b64encode(gxdecode.encode_rgba8(img)).decode()}
+
+
+def test_eyes(work):
+    """A 4-UV-set layered eye (Brawl style: lids, iris, white listed top first, iris on UV set 2, white on set 3) is
+    baked to one static texture automatically, and the build reports it."""
+    import argparse, gxdecode
+    s = make_source()
+    clear = np.zeros((8, 8, 4), np.uint8)
+    iris = clear.copy(); iris[2:6, 2:6] = [200, 0, 0, 255]
+    white = np.full((8, 8, 4), 255, np.uint8)
+    s["textures"] += [rgba_tex("e_up", clear), rgba_tex("e_low", clear), rgba_tex("e_iris", iris), rgba_tex("e_white", white)]
+    s["materials"].append({"name": "eyemat", "refs": [{"texture": "e_up", "map": "TexCoord", "coord": "TexCoord0"},
+                                                     {"texture": "e_low", "map": "TexCoord", "coord": "TexCoord1"},
+                                                     {"texture": "e_iris", "map": "TexCoord", "coord": "TexCoord2", "u": "Clamp", "v": "Clamp"},
+                                                     {"texture": "e_white", "map": "TexCoord", "coord": "TexCoord3"}]})
+    def fp(u, v): return [0.1 * u, 5.6 + 0.1 * v, 0.2, 0, 0, 1, u, v, u, v, 0, 0, 0, 0, [["HeadN", 1.0]]]
+    quad = [(0, 0), (1, 0), (0, 1), (1, 0), (1, 1), (0, 1)]
+    # UV sets 2 and 3: the iris set is offset, so the iris lands off-centre in UV0 space
+    s["objects"].append({"name": "eye", "material": "eyemat", "visbone": "HeadN", "uv_sets": 4,
+                         "tris": [fp(u, v) for u, v in quad], "uvx": [[u * 0.5 + 0.25, v * 0.5, u, v] for u, v in quad]})
+    assert [o["name"] for o, _ in skin.layered_objects(s)] == ["eye"]
+    log = []; t = json.loads(json.dumps(s))
+    assert skin.bake_layers(t, log) == 1 and "eyes baked from 4 layers" in log[0], log
+    eye = [o for o in t["objects"] if o["name"] == "eye"][0]
+    m = {x["name"]: x for x in t["materials"]}[eye["material"]]
+    assert len(m["refs"]) == 1 and m["refs"][0]["coord"] == "TexCoord0", m
+    img = gxdecode.decode({x["name"]: x for x in t["textures"]}[m["refs"][0]["texture"]])
+    # UV0 (x, y) -> iris UV (0.5x + 0.25, 0.5y): the 2..6 red block of the 8 px iris lands at UV0 x in [0, 1), y in [0.5, 1.0)
+    assert tuple(img[6, 4][:3]) == (200, 0, 0) and tuple(img[1, 4][:3]) == (255, 255, 255), (img[6, 4], img[1, 4])
+    # end to end: the build bakes and reports it; --no-bake-eyes leaves it alone
+    sp = os.path.join(work, "eye_source.json"); json.dump(s, open(sp, "w"))
+    gp = os.path.join(work, "eye_groups.json")
+    json.dump({"dobjs": {"0": {"objects": ["body"]}, "1": {"objects": ["arm"]}, "2": {"objects": ["eye"]}}}, open(gp, "w"))
+    mp = os.path.join(work, "synthmap.json")
+    skin.LIMITS["file_growth"] = 1e9
+    try:
+        for no_bake in (False, True):
+            out = os.path.join(work, "eye_%d.dat" % no_bake)
+            rc = skin.build(argparse.Namespace(source=sp, fighter="luigi", retail=os.path.join(work, "synth_retail.dat"), groups=gp, fighter_dat=None,
+                                               out=out, plco=None, map=mp, work=None, scale=None, repose="aim", source_costume="00", install=None,
+                                               name=None, slot=None, tri_budget=50, no_bake_eyes=no_bake))
+            assert rc == 0, rc
+            ck = json.load(open(os.path.splitext(out)[0] + "_work/checks.json"))
+            eyes = [x for x in ck["checks"] if x["check"] == "eyes"]
+            assert (not eyes) if no_bake else (eyes and "4 layers; static, no blink" in eyes[0]["detail"]), ck["checks"]
+    finally:
+        skin.LIMITS["file_growth"] = 1.6
+    print("EYE BAKE TESTS PASS")
+
+
+def test_detect(work):
+    """Fighter detection on made-up names and rigs: the source's own name wins over bone names (clones share a rig);
+    bone-name fallback reports near-ties as needs_review."""
+    src = make_source(); bones = [b["name"] for b in src["bones"]]
+    os.makedirs(paths.MAPS, exist_ok=True)
+    made = []
+    for k, ch, bs in (("_twin_a", "twina", bones), ("_twin_b", "twinb", bones), ("_far", "far", ["X1", "X2"])):
+        p = os.path.join(paths.MAPS, k + ".bones.json"); made.append(p)
+        json.dump({"source_character": ch, "source_bones": bs, "source_to_target": {b: "J0" for b in bs}}, open(p, "w"))
+    try:
+        cases = {"x/fighter/luigi/FitLuigi00.pac": "luigi", "FitLuigi00.json": "luigi", "pf/fighter/captain/FitCaptain03.pcs": "falcon",
+                 "mod/fighter/purin/FitPurin05.pcs": "jigglypuff", "some/FitKoopa.pac": "bowser"}
+        for h, want in cases.items():
+            d = skin.detect_fighter(src, h)
+            assert d["fighter"] == want and not d["needs_review"] and d["how"].startswith("name"), (h, d)
+        d = skin.detect_fighter(src, "downloads/cool_skin.pcs")          # no name: bones; two templates within the margin
+        assert d["how"] == "bones" and d["needs_review"] and {k for _, k in d["candidates"]} >= {"_twin_a", "_twin_b"}, d
+        os.remove(made[1])
+        d = skin.detect_fighter(src, "downloads/cool_skin.pcs")          # one clear winner
+        assert d["fighter"] == "_twin_a" and not d["needs_review"], d
+        d = skin.detect_fighter({"bones": [{"name": "Q"}]}, "")
+        assert d["fighter"] is None and d["needs_review"], d
+    finally:
+        for p in made:
+            if os.path.exists(p): os.remove(p)
+    print("DETECT TESTS PASS")
 
 
 def write_hsd(data, relocs, roots):

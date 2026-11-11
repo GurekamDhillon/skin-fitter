@@ -59,6 +59,9 @@ class ModelExport
             w.Append("\n{\"name\":" + Esc(o.Name) + ",\"material\":" + Esc(mat) + ",\"visbone\":" + Esc(vis) + ",\"has\":[");
             for (int k = 0; k < 12; k++) { if (k > 0) w.Append(","); w.Append(pm._faceData[k] != null ? "1" : "0"); }
             w.Append("],\"tris\":[");
+            // UV sets 2..7 (Brawl eyes layer textures on sets 2 and 3): written per facepoint as "uvx" after "tris"
+            int extra = 0; for (int u = 6; u < 12; u++) if (pm._faceData[u] != null) extra = u - 5;
+            var ux = new StringBuilder();
             var tri = GetF(pm, "_triangles");
             uint[] idx = tri == null ? new uint[0] : (uint[])GetF(tri, "_indices");
             ushort* vmap = (ushort*)pm._indices.Address;
@@ -75,6 +78,18 @@ class ModelExport
                     pos = bm * pos;
                     Matrix r = bm.GetRotationMatrix();
                     nrm = r * nrm;
+                }
+                if (extra > 0)
+                {
+                    if (t > 0) ux.Append(",");
+                    ux.Append("[");
+                    for (int u = 6; u < 6 + extra; u++)
+                    {
+                        if (u > 6) ux.Append(",");
+                        if (pm._faceData[u] != null) { var uv = ((Vector2*)pm._faceData[u].Address)[fp]; ux.Append(F(uv._x) + "," + F(uv._y)); }
+                        else ux.Append("0,0");
+                    }
+                    ux.Append("]");
                 }
                 if (t > 0) w.Append(",");
                 w.Append("[" + F(pos._x) + "," + F(pos._y) + "," + F(pos._z) + "," + F(nrm._x) + "," + F(nrm._y) + "," + F(nrm._z));
@@ -94,7 +109,9 @@ class ModelExport
                 }
                 w.Append("]]");
             }
-            w.Append("]}");
+            w.Append("]");
+            if (extra > 0) w.Append(",\"uv_sets\":" + (2 + extra) + ",\"uvx\":[" + ux + "]");
+            w.Append("}");
         }
         w.Append("],\n\"materials\":[");
         var mats = new List<ResourceNode>(); Walk(mdl, mats, typeof(MDL0MaterialNode));

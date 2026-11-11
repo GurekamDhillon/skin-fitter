@@ -28,7 +28,9 @@ The front door (`python frontdoor.py`) takes you through it one step at a time:
    you install, see Requirements).
 3. **Pick the Brawl character.**
 4. **Pick the skin** (costume). Triangle, bone, object and texture counts are shown.
-5. **Pick the Melee fighter.** It is pre-selected by bone-name detection; change it if needed.
+5. **Pick the Melee fighter.** It is pre-selected from the source's own name (`FitLuigi00.pac`, a `fighter/luigi/`
+   folder); without a usable name, from bone names. Clones share a skeleton, so when two fighters score within 0.1
+   both are shown and the step says "Needs review".
 6. **Pick the slot**: add as a new m-ex costume, or replace one of the fighter's colours.
 7. **Convert.** Runs `skin.py build` and shows the pass/fail checks and the netplay verdict ("Needs review" when the
    automatic slot or bone mapping is unsure).
@@ -86,6 +88,7 @@ python skin.py build  --source <Brawl fighter folder | .pac | .pcs | source.json
        --out <out>/PlLgXx.dat [--groups groups.json] [--map map.json] [--install <mods> --name "Skin"] [--slot Gr]
 python skin.py target | automap | retarget | batch | detect ...          # the individual steps
 python jointdiff.py PlLgNr.dat PlLgXx.dat                                # exit 0 = skeleton and non-visual fields identical
+# a colour file made with --slot Gr is compared with retail PlLgGr.dat (build does this when that file sits next to --retail)
 ```
 
 `build`, in order: exports the `.pac` with `model_export`; reads the retail costume and names its joints from PlCo;
@@ -94,7 +97,12 @@ retargets (weights summed per target joint, cut to 4, renormalised; mesh re-pose
 a slot config may list `repose_inherit` bones that ride with their parent); writes the costume with `costumebuild`
 (retail JObjs, MObjs and TObj chains kept, DObj slots `replace`/`keep`/`blank`, textures over 256 px downscaled to
 CMPR or RGB5A3, CI4/CI8 palettes kept); runs the checks and `jointdiff`; with `--install`, copies the file into
-`<mods>/<name>/files/` with a `mod.json` (`--slot` renames it to that colour file and retags its symbols).
+`<mods>/<name>/files/` with a `mod.json` (`--slot` renames it to that colour file and retags its symbols, then runs
+`jointdiff` against that colour's retail file `Pl<code><slot>.dat` when it is next to `--retail`).
+
+Layered materials (Brawl eyes: lids, iris and white on UV sets 0 to 3) are found from the material's texture
+coordinates and baked automatically into one static texture in UV-set-0 space; the checks list
+"eyes baked from N layers; static, no blink". `--no-bake-eyes` turns this off (only the first texture is used).
 
 Without `--groups`, `autogroups.py` assigns source objects to retail slots from the fighter data file.
 
@@ -146,12 +154,13 @@ free `Pl<code>X?.dat` and retags its symbols).
 | object slots | same DObj count, order and owning joint | part-visibility tables index them |
 | influences | at most 4 per vertex; fails if more than 0.25 of a vertex's weight is dropped | HSD envelopes |
 | textures | native GX formats, at most 256 px per side | console texture memory |
-| triangles, file size | at most 1.6x the retail costume | conservative heap headroom; not a measured console maximum |
+| triangles, file size | at most 1.6x the retail costume, counted over the whole costume (kept and blanked slots included) | conservative heap headroom; not a measured console maximum |
 
 ## Known limits
 
-- **Eyes do not blink.** Retail animated eye slots are blanked and the source eyes are static
-  (`tools/bake_eyes.py` can bake Brawl's layered eye textures into one).
+- **Eyes do not blink.** Retail animated eye slots are blanked and the source eyes are static. Layered Brawl eyes are
+  baked automatically into one image (the composite order, top layer first in the material, was checked against
+  one real fighter; `tools/bake_eyes.py` remains as the manual version).
 - **Winding reversal is opt-in** (`SKIN_REVERSE=1` for `costumebuild`); the old default turned real Brawl meshes
   inside out.
 - **m-ex costume rows** (`mexcostume`) work on an *extracted* m-ex build of the MexManager layout only; other
@@ -168,7 +177,8 @@ free `Pl<code>X?.dat` and retags its symbols).
 source rig, and checks auto-mapping, weights, re-posing, CI8 palettes, texture downscaling, alpha test, DObj slots,
 `jointdiff` (pass on output, fail on a tampered copy), compressed community-skin files and autogroups. It uses a
 temporary data folder and reads no game files. One "FAIL file size" line in its output is expected (the tiny
-synthetic retail file makes the size check trip; the test asserts that).
+synthetic retail file makes the size check trip; the test asserts that). It also covers fighter detection by name
+and the near-tie "Needs review" case, and a 4-UV-set layered eye. `python test_mexcostume.py` runs the m-ex tests.
 
 Screenshots in `docs/` show only the synthetic test model.
 

@@ -144,9 +144,12 @@ class Front(QtWidgets.QMainWindow):
         except skin.SourceError as e:
             self.sinfo.setText("Cannot read this file: %s" % e); self.src = None; return
         self.sinfo.setText("  ".join("%s %s" % (v, k) for k, v in st.items()))
-        det = skin.detect(self.src, self.srcpath)
-        if det and det[0][0] >= 0.5:
-            self.fig.setCurrentText(det[0][1]); self.det.setText("Detected from the skeleton (%.2f)" % det[0][0])
+        who = skin.detect_fighter(self.src, self.srcpath)
+        if who["fighter"]: self.fig.setCurrentText(who["fighter"])
+        if who["how"].startswith("name"): self.det.setText("Detected from the file name")
+        elif who["needs_review"] and who["candidates"]:
+            self.det.setText("Needs review: the skeleton fits %s; choose the fighter" % " or ".join("%s (%.2f)" % (k, s) for s, k in who["candidates"]))
+        elif who["fighter"]: self.det.setText("Detected from the skeleton (%.2f)" % who["candidates"][0][0])
         else: self.det.setText("No confident match: choose the fighter")
         self.name.setText(os.path.splitext(os.path.basename(self.srcpath))[0])
 
@@ -158,10 +161,12 @@ class Front(QtWidgets.QMainWindow):
         import melee_fighters as B
         code = B.FIGHTERS[f][1]; md = os.path.join(self.work, "melee", f)
         if not env.get("SKIN_MELEE_IMAGE") and not os.path.exists(os.path.join(md, "Pl%sNr.dat" % code)): self.log.appendPlainText("Set your Melee disc first."); return
-        if not os.path.exists(os.path.join(md, "Pl%sNr.dat" % code)):
-            for cos in ("Nr", ""):
-                r = subprocess.run([sys.executable, os.path.join(HERE, "skin.py"), "fetch", "--fighter", f, "--costume", cos, "--out", md], env=env, capture_output=True, text=True)
-                if r.returncode: self.log.appendPlainText("Could not read the Melee disc: %s" % r.stderr.strip()[-200:]); return
+        slot = (COLOURS[self.slot.currentIndex() - 1],) if self.slot.currentIndex() > 0 else ()
+        for cos in ("Nr", "") + slot:            # the slot's own retail file lets the build check its skeleton too
+            if os.path.exists(os.path.join(md, "Pl%s%s.dat" % (code, cos))) or not env.get("SKIN_MELEE_IMAGE"): continue
+            r = subprocess.run([sys.executable, os.path.join(HERE, "skin.py"), "fetch", "--fighter", f, "--costume", cos, "--out", md], env=env, capture_output=True, text=True)
+            if r.returncode and cos in slot: self.log.appendPlainText("No retail %s file to compare against; checking against Nr only." % cos)
+            elif r.returncode: self.log.appendPlainText("Could not read the Melee disc: %s" % r.stderr.strip()[-200:]); return
         self.set["mods"] = self.mods.text(); save_settings(self.set)
         out = os.path.join(self.work, "out", "%s_%s.dat" % (code, self.name.text().replace(" ", "_")))
         os.makedirs(os.path.dirname(out), exist_ok=True); self.out = out

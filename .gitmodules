@@ -1,0 +1,6 @@
+[submodule "deps/HSDLib"]
+	path = deps/HSDLib
+	url = https://github.com/Ploaj/HSDLib.git
+[submodule "deps/BrawlCrate"]
+	path = deps/BrawlCrate
+	url = https://github.com/soopercool101/BrawlCrate.git

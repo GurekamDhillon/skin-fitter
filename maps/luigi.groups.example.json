@@ -1,0 +1,7 @@
+{"_about": "Example DObj slot config for a Melee Luigi target. Fill the indices from `skin.py target PlLgNr.dat --fighter luigi --plco PlCo.dat -o t.json` (dobjs[].joint shows the owning joint) and the source object names from the source JSON. Slots not listed keep the retail mesh. mode: replace (objects + optional textures per retail TObj slot, null = keep retail image; alpha_test), keep, blank.",
+ "max_texture": 256,
+ "dobjs": {
+  "0": {"objects": ["<body object>"], "textures": ["<body texture>"]},
+  "1": {"objects": ["<cap object>"]},
+  "10": "blank",
+  "20": "keep"}}

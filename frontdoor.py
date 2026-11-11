@@ -77,6 +77,9 @@ class Front(QtWidgets.QMainWindow):
         self.slot = QtWidgets.QComboBox(); self.slot.addItems(["Add as a new m-ex costume"] + ["Replace colour %s" % c for c in COLOURS]); R.addRow("5  Slot", self.slot)
         self.name = QtWidgets.QLineEdit(); R.addRow("Name", self.name)
         self.mods = QtWidgets.QLineEdit(self.set.get("mods", paths.MODS)); R.addRow("Mods folder", self.mods)
+        # "Add as a new m-ex costume": when an extracted m-ex build folder is given, the row is added there too
+        self.mexdir = QtWidgets.QLineEdit(self.set.get("mex_build", "")); self.mexdir.setPlaceholderText("extracted m-ex build (sys/, files/), optional")
+        R.addRow("m-ex build", self.mexdir)
         self.go = QtWidgets.QPushButton("Convert this skin"); self.go.setObjectName("go"); self.go.clicked.connect(self.convert); R.addRow(self.go)
         self.verdict = QtWidgets.QLabel(""); self.verdict.setWordWrap(True); R.addRow(self.verdict)
         un = QtWidgets.QPushButton("Uninstall what I installed"); un.clicked.connect(self.uninstall); R.addRow(un)
@@ -181,12 +184,27 @@ class Front(QtWidgets.QMainWindow):
             self.verdict.setText("<span style='color:%s;font-family:%s;font-size:14pt'>Installed, netplay-safe</span>%s" % (
                 C["hi"], HEAD, "<br><span style='color:%s'>Needs review: open Advanced to check the bone or slot map.</span>" % C["mid"] if review else ""))
             self.remember_install()
+            self.add_to_mex()
         elif code == 2:
             self.verdict.setText("<span style='color:%s'>Over the limits; not installed. The log says which check failed.</span>" % C["lo"])
         elif code == 3:
             self.verdict.setText("<span style='color:%s'>Could not read this skin; see the log.</span>" % C["lo"])
         else:
             self.verdict.setText("<span style='color:%s'>Not installed. Needs review in Advanced.</span>" % C["lo"])
+
+    def add_to_mex(self):
+        """Slot step, "Add as a new m-ex costume": add the built file as a new costume row (mexcostume, with undo)."""
+        mex = self.mexdir.text().strip()
+        if self.slot.currentIndex() != 0 or not mex: return
+        self.set["mex_build"] = mex; save_settings(self.set)
+        import mexcostume
+        try:
+            ok, out = mexcostume.add_costume(mex, self.fig.currentText(), self.out)
+        except mexcostume.MexCostumeError as e:
+            ok, out = False, str(e)
+        self.log.appendPlainText(out)
+        self.verdict.setText(self.verdict.text() + ("<br>Added to the m-ex build (undo: mexcostume undo)." if ok else
+                             "<br><span style='color:%s'>Not added to the m-ex build; see the log.</span>" % C["lo"]))
 
     def remember_install(self):
         import re

@@ -32,3 +32,4 @@ maps/*.roles.json
 *.log
 .vs/
 coverage.md
+skinfitter-undo/

@@ -2,7 +2,7 @@
 # Copyright (C) 2026 GD (Gurekam Dhillon)
 # Builds Skin Fitter's helpers from source:
 #   1. fetches HSDLib and BrawlCrate (BrawlLib) at the commits recorded as git submodules in deps/
-#   2. costumebuild  (net8.0, HSDLib/HSDRaw, MIT)            -> costumebuild\bin\Release\net8.0\
+#   2. costumebuild, mexcostume and its tests (net8.0, HSDLib/HSDRaw, MIT)
 #   3. model_export, brawl_matdump (net472, BrawlLib LGPL-3.0) -> brawlreader\bin\Release\net472\
 # Usage: .\build.ps1 [-BrawlLibProject C:\path\to\your\BrawlLib.csproj] [-SkipFetch] [-SkipBrawl]
 param([string]$BrawlLibProject = "", [switch]$SkipFetch, [switch]$SkipBrawl)
@@ -14,8 +14,12 @@ if (-not $SkipFetch) {
     if ($LASTEXITCODE -ne 0) { throw "submodule fetch failed" }
 }
 
-dotnet build costumebuild\costumebuild.csproj -c Release -nologo
+dotnet build costumebuild\costumebuild.csproj -c Release -nologo -m:2
 if ($LASTEXITCODE -ne 0) { throw "costumebuild failed" }
+dotnet build mexcostume\cs\mexcostume.csproj -c Release -nologo -m:2
+if ($LASTEXITCODE -ne 0) { throw "mexcostume failed" }
+dotnet build mexcostume\tests\mexcostume.tests.csproj -c Release -nologo -m:2
+if ($LASTEXITCODE -ne 0) { throw "mexcostume tests failed to build" }
 
 if (-not $SkipBrawl) {
     # BrawlLib has non-string .resx resources, which need the Visual Studio (full framework) MSBuild,

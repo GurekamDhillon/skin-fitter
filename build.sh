@@ -7,5 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 git submodule update --init --depth 1 deps/HSDLib deps/BrawlCrate
-dotnet build costumebuild/costumebuild.csproj -c Release -nologo
+dotnet build costumebuild/costumebuild.csproj -c Release -nologo -m:2
+dotnet build mexcostume/cs/mexcostume.csproj -c Release -nologo -m:2
+dotnet build mexcostume/tests/mexcostume.tests.csproj -c Release -nologo -m:2
 if [ "${1:-}" = "--brawl" ]; then powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1 -SkipFetch; fi

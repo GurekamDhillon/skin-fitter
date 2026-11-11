@@ -112,12 +112,31 @@ Without `--groups`, `autogroups.py` assigns source objects to retail slots from 
 | `coverage.py` | reads the structure of all 26 Melee fighters (names and counts) into a report |
 | `paths.py` | repo, user data, work and tool locations |
 | `mex_hsd.py`, `melee_fighters.py` | GCM/HSD readers and the fighter table (vendored from the author's own tools) |
-| `mexcostume/` | **stub only**: interface for a future m-ex slot install step (see Known limits) |
+| `mexcostume/` | the m-ex costume step: C# tool (`cs/`, on HSDRaw) + Python wrapper; tests in `tests/` and `test_mexcostume.py` |
 | `costumebuild/` | C# on HSDLib: `build`, `inspect`, `synth` |
 | `brawlreader/` | C# on BrawlLib: `model_export` (Brawl model to JSON), `brawl_matdump` (material dump) |
 | `tools/bake_eyes.py`, `tools/cmpr.py` | optional: bake Brawl's layered eye textures into one static texture |
 | `test_synthetic.py` | end-to-end test on made-up data |
 | `deps/` | git submodules: HSDLib, BrawlCrate (BrawlLib) |
+
+## m-ex costume rows
+
+```
+mexcostume\csin\Release
+et8.0\mexcostume.exe list    <build> [--fighter-file PlLg.dat] [--json]
+mexcostume.exe verify  <build>
+mexcostume.exe add     <build> --fighter-file PlLg.dat --costume PlLgXa.dat [--like 0] [--reuse-images]
+mexcostume.exe replace <build> --fighter-file PlLg.dat --row 6 --costume PlLgXa.dat
+mexcostume.exe remove  <build> --fighter-file PlLg.dat            (last row, added by this tool)
+mexcostume.exe undo    <build> [--force]
+```
+
+`<build>` is an extracted m-ex disc (`sys/`, `files/`). Before any edit the build must pass `verify`; the tool then
+writes `<build>/skinfitter-undo/<time>-<op>/` (manifest and backups of every file it will change), edits
+`MxDt.dat` (row, costume count, runtime block), `MnSlChr.usd` (portrait key) and `IfAll.usd` (stock key), copies the
+costume in, re-reads and re-verifies, and rolls back on any failure. The front door does this in the slot step when
+"Add as a new m-ex costume" is chosen and an m-ex build folder is given (`mexcostume.add_costume` renames the file to a
+free `Pl<code>X?.dat` and retags its symbols).
 
 ## Checks and limits
 
@@ -135,9 +154,11 @@ Without `--groups`, `autogroups.py` assigns source objects to retail slots from 
   (`tools/bake_eyes.py` can bake Brawl's layered eye textures into one).
 - **Winding reversal is opt-in** (`SKIN_REVERSE=1` for `costumebuild`); the old default turned real Brawl meshes
   inside out.
-- **The m-ex slot install step is absent.** It is being reimplemented; `mexcostume/` holds only a marked stub
-  interface. Today "add as a new m-ex costume" writes a local mod folder with a `mod.json` describing the costume,
-  and "replace colour XX" writes a replacement colour file.
+- **m-ex costume rows** (`mexcostume`) work on an *extracted* m-ex build of the MexManager layout only; other
+  layouts (e.g. mexTool-era builds) are refused. A new row gets a copy of an existing costume's portrait and stock
+  icon (or reuses them with `--reuse-images`); importing new portrait/icon art is not implemented yet. Only the last
+  row, and only one this tool added, can be removed. HSDRaw re-lays-out the three archives it saves, so after
+  add + remove the files are structurally equal to the original but not byte-identical; `undo` is byte-identical.
 - Fist and low-detail slots are inferred from skin weights, not from the animation files; check "Needs review"
   results in the advanced window.
 

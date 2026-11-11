@@ -8,7 +8,7 @@ updated for this standalone repository.
 
 | Component | Source, commit | How the tool uses it | Licence | Obligations / status |
 |---|---|---|---|---|
-| Our code: `*.py`, `tools/*.py`, `costumebuild/`, `brawlreader/`, `mexcostume/` (stub) | this repository | — | **GPL-3.0-or-later**, Copyright (C) 2026 GD (Gurekam Dhillon) | `LICENSE`; SPDX headers in every source file |
+| Our code: `*.py`, `tools/*.py`, `costumebuild/`, `brawlreader/`, `mexcostume/` (clean-room: written from a prose format specification and HSDRaw's MIT accessors only) | this repository | — | **GPL-3.0-or-later**, Copyright (C) 2026 GD (Gurekam Dhillon) | `LICENSE`; SPDX headers in every source file |
 | `mex_hsd.py`, `melee_fighters.py` | vendored from the author's own workspace tools (`mex_hsd.py` whole; `melee_fighters.py` is the `FIGHTERS` and `COMMON` tables trimmed from `build_melee_fighter.py`) | GCM/HSD reading; fighter codes and PlCo common joint names | the project's own code, git author "GD" | **Uncertain** (from the original audit): whether `mex_hsd.py` was written with reference to HSDLib or m-ex sources was not established from its history; it is a plain reader of the documented HSD archive layout |
 | `model_export.cs`, `brawl_matdump.cs` | the author's own code (git author "GD") | Brawl model reader | ours | use BrawlLib's API; copy no BrawlLib source |
 | HSDLib / HSDRaw | github.com/Ploaj/HSDLib, submodule at upstream `85567e40797de3c820a55476eca54c704921a848` | `costumebuild` project reference | **MIT** (Copyright (c) 2021 Ploaj) | licence text in `licenses/HSDLib-MIT.txt` and `THIRD_PARTY.md`. Note: the original audit named commit `6d45b7f4`; that is the author's local fork commit (two `POBJ_Generator` additions on top of upstream `85567e4`) and cannot be fetched from GitHub. `costumebuild` uses none of those additions; the synthetic test passes against upstream `85567e4` |
@@ -18,7 +18,7 @@ updated for this standalone repository.
 | NumPy | pip | `skin.py`, `autogroups.py`, `ui.py`, tests | BSD-3-Clause | keep notice if bundled |
 | .NET SDK / runtime | user-installed | runs the C# helpers | MIT | none if not bundled |
 | DolphinTool | user-installed Dolphin | separate process (`unpack_disc.py`) | GPL-2.0-or-later | not distributed; documented as a prerequisite |
-| m-ex, mexTool, MexManager / mexLib | — | **not used** | no licence: all rights reserved | nothing from them may be linked, copied or shipped. The m-ex slot install step is absent until reimplemented clean-room (`mexcostume/` is a stub) |
+| m-ex, mexTool, MexManager / mexLib | — | **not used** | no licence: all rights reserved | nothing from them may be linked, copied or shipped. `mexcostume/` was reimplemented clean-room from a facts-only specification; the community tool's output was used only as local before/after test data, never copied |
 | Game data (Melee, Brawl) | the user's own discs | read at run time | Nintendo's copyright | never shipped |
 
 ## Why GPL-3.0-or-later
@@ -39,8 +39,8 @@ LGPL-3.0 (PySide6) are all compatible with GPL-3.0. **Uncertain:** a future GPL-
 
 ## Must NOT be in the repository or a release
 
-- Anything from m-ex, mexTool or MexManager/mexLib, including the old `mexcostume` implementation from the
-  workspace (written after reading mexLib; not clean-room). Only a stub interface is here.
+- Anything from m-ex, mexTool or MexManager/mexLib, including the old workspace `mexcostume` implementation (written after
+  reading mexLib; not clean-room) and the oracle data produced with the community tool.
 - Any disc-derived file: models, textures, costumes, `.pac`/`.pcs`, `.dat`, disc images, and the
   `<fighter>.bones.json` / `<fighter>.roles.json` tables (owner decision: users generate them on first use;
   `.gitignore` blocks them under `maps/`).

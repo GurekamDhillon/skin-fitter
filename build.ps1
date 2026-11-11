@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 if (-not $SkipFetch) {
-    git submodule update --init --depth 1 deps/HSDLib deps/BrawlCrate
+    git -c core.longpaths=true submodule update --init --depth 1 deps/HSDLib deps/BrawlCrate   # longpaths: BrawlCrate has very long file names
     if ($LASTEXITCODE -ne 0) { throw "submodule fetch failed" }
 }
 

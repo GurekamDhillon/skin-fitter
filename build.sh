@@ -6,7 +6,7 @@
 # call build.ps1 through PowerShell (Git Bash).
 set -euo pipefail
 cd "$(dirname "$0")"
-git submodule update --init --depth 1 deps/HSDLib deps/BrawlCrate
+git -c core.longpaths=true submodule update --init --depth 1 deps/HSDLib deps/BrawlCrate   # longpaths: BrawlCrate has very long file names
 dotnet build costumebuild/costumebuild.csproj -c Release -nologo -m:2
 dotnet build mexcostume/cs/mexcostume.csproj -c Release -nologo -m:2
 dotnet build mexcostume/tests/mexcostume.tests.csproj -c Release -nologo -m:2
